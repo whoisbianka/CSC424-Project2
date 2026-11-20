@@ -30,44 +30,160 @@
     # ======================= Domain A — System / SSH =====================
     # TODO: SSH — disallow root login and password auth, then restart ssh
     #   (modules: ansible.builtin.lineinfile or blockinfile; ansible.builtin.service)
-    #
+    - name: Configure SSH hardening
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        insertbefore: BOF
+        validate: /usr/sbin/sshd -t -f %s
+        block: |
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          AuthenticationMethods publickey
+      register: ssh_hardening
+
+    - name: Reload SSH if configuration changed
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded
+      when: ssh_hardening.changed
+
     # TODO: Host firewall (UFW) — active, default-deny incoming, allow only SSH
     #   (module: community.general.ufw, or ansible.builtin.command as a last resort)
-    #
+    - name: Allow SSH
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Deny incoming traffic
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+    - name: Enable firewall
+      community.general.ufw:
+        state: enabled
     # TODO: Remove the unauthorized scheduled job
     #   (module: ansible.builtin.file  state: absent  — or ansible.builtin.cron)
-    #
+    - name: Remove unauthorized cron job
+      ansible.builtin.file:
+        path: /etc/cron.d/cache-warm
+        state: absent
     # TODO: Stop + disable + remove the unnecessary service
     #   (modules: ansible.builtin.service; ansible.builtin.package state: absent)
-    #
+    - name: Stop and disable unnecessary service
+      ansible.builtin.service:
+        name: debugshell.service
+        state: stopped
+        enabled: false
+    - name: Remove unnecessary service
+      ansible.builtin.file:
+        path: /etc/systemd/system/debugshell.service.d
+        state: absent
     # TODO: Install fail2ban and make sure it protects sshd
     #   (modules: ansible.builtin.package; ansible.builtin.copy/template; service)
-    #
+    - name: Install fail2ban
+      ansible.builtin.package:
+        name: fail2ban
+        state: present
+    - name: Configure fail2ban for sshd
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshdjail.local
+        content: |
+          [sshd]
+          enabled = true
+          backend = systemd
+      register: fail2ban_config
+    - name: Start and enable fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+    - name: Restart fail2ban if configuration changed
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+      when: fail2ban_config.changed
     # TODO: Fix the world-writable application directory
     #   (module: ansible.builtin.file  mode/owner/group)
-
+    - name: Fix world-writable application directory permissions
+      ansible.builtin.file:
+        path: /srv/app/uploads
+        mode: "0775"
+        owner: root
+        group: root
     # ================= Domain B — Users / privilege escalation ===========
     # TODO: Remove or lock the unauthorized sudo account
     #   (module: ansible.builtin.user  state: absent  — or lock the password)
-    #
+    - name: Remove unauthorized sudo account
+      ansible.builtin.user:
+        name: helpdesk
+        state: absent
     # TODO: Remove the passwordless-sudo (NOPASSWD) rule
     #   (module: ansible.builtin.file  state: absent)
-    #
+    - name: Remove passwordless sudo rule
+      ansible.builtin.file:
+        path: /etc/sudoers.d/90-course-nopasswd
+        state: absent
+    - name: Remove cloud-init passwordless sudo rule
+      ansible.builtin.file:
+        path: /etc/sudoers.d/90-cloud-init-users
+        state: absent
     # TODO: Remove the unexpected SUID-root binary
     #   (module: ansible.builtin.file  state: absent  — or fix the mode)
-    #
+    - name: Remove SUID permission from diagtool
+      ansible.builtin.file:
+        path: /usr/local/bin/diagtool
+        mode: "0755"
     # TODO: Fix the account that has a blank password
     #   (module: ansible.builtin.user  — set/lock the password)
-    #
+    # Pass kioskuser_password_hash as a private extra variable on the target VM.
+    - name: Set password for kioskuser
+      no_log: true
+      ansible.builtin.user:
+        name: kioskuser
+        password: "{{ kioskuser_password_hash }}"
     # TODO: Restrict the world-readable credentials file
     #   (module: ansible.builtin.file  mode: "0600"  + owner)
-
+    - name: Restrict world-readable credentials file
+      ansible.builtin.file:
+        path: /opt/intranet/settings.ini
+        mode: "0600"
+        owner: root
     # ================== Domain C — Database least-privilege ==============
     # These need the community.mysql collection + pymysql. Install once:
     #     ansible-galaxy collection install community.mysql
     #     sudo apt-get install -y python3-pymysql
     #
     # TODO: Scope the webapp account to only what it needs (see the inventory)
+    - name: Restrict webapp database privileges
+      community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: webapp
+        host: "%"
+        priv: "portaldb.*:SELECT,INSERT,UPDATE,DELETE"
+        state: present
     # TODO: Scope the reporting account to read-only on its DB
+    - name: Restrict reporting database privileges
+      community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: reporting
+        host: "%"
+        priv: "portaldb.*:SELECT"
+        state: present
     # TODO: Tighten DB access hosts; drop anonymous/stale accounts
+    - name: Remove remote root account
+      community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: root
+        host: "%"
+        state: absent
+    - name: Remove anonymous account
+      community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: ""
+        host: localhost
+        state: absent
+
     #   (module: community.mysql.mysql_user  — priv:, host:, login_unix_socket:)
