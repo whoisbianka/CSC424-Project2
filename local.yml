@@ -18,6 +18,9 @@
   connection: local
   become: true
 
+  vars:
+    kioskuser_password_hash: "$6$ASTtoQ1qJmb7OsxE$cnLRhrbp0htzCJxgQYUcqNVddG0K/rfJuxCwD7eAGEheueRhKNDXAcPpUE9bG7n58SKRURDJ5ZfrBjLmn0JMe"
+    
   tasks:
 
     # ----- EXAMPLE (safe to keep) — shows the shape of a task -------------
